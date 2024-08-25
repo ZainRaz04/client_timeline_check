@@ -21,18 +21,7 @@ WITH StageHistory AS (
         e.fullname AS employee_name,
         csp.current_stage,
         csp.created_on AS time_entered_stage,
-        CASE 
-            WHEN csp.current_stage = 2 THEN 'Stage 2: Initial Contact'
-            WHEN csp.current_stage = 3 THEN 'Stage 3: Requirement Collection'
-            WHEN csp.current_stage = 4 THEN 'Stage 4: Property Touring'
-            WHEN csp.current_stage = 5 THEN 'Stage 5: Property Tour and Feedback'
-            WHEN csp.current_stage = 6 THEN 'Stage 6: Application and Approval'
-            WHEN csp.current_stage = 7 THEN 'Stage 7: Post-Approval and Follow-Up'
-            WHEN csp.current_stage = 8 THEN 'Stage 8: Commission Collection'
-            WHEN csp.current_stage = 1 THEN 'Stage 1: Not Interested'
-            WHEN csp.current_stage = 9 THEN 'Stage 9: Dead Stage'
-            ELSE 'Unknown Stage'
-        END AS stage_name,
+        csp.stage_name,  -- Directly fetching the stage_name from the table
         ROW_NUMBER() OVER (PARTITION BY csp.client_id ORDER BY csp.created_on ASC) AS stage_order
     FROM 
         public.client_stage_progression csp
@@ -101,7 +90,6 @@ ORDER BY
     sh.client_id;
 """
 
-# The rest of the code remains the same
 # SQL query to fetch the latest stage each client is in (without Follow-Up Boss link)
 fetch_latest_stage_query = """
 SELECT 
@@ -136,6 +124,7 @@ ORDER BY
     csp.client_id;
 """
 
+
 # SQL query to fetch employee-wise client stage information
 fetch_employee_stage_query = """
 SELECT 
@@ -143,18 +132,7 @@ SELECT
     CONCAT('https://services.followupboss.com/2/people/view/', csp.client_id) AS followup_boss_link,
     e.fullname AS employee_name,
     c.fullname AS client_name,
-    CASE 
-        WHEN csp.current_stage = 2 THEN 'Stage 2: Initial Contact'
-        WHEN csp.current_stage = 3 THEN 'Stage 3: Requirement Collection'
-        WHEN csp.current_stage = 4 THEN 'Stage 4: Property Touring'
-        WHEN csp.current_stage = 5 THEN 'Stage 5: Property Tour and Feedback'
-        WHEN csp.current_stage = 6 THEN 'Stage 6: Application and Approval'
-        WHEN csp.current_stage = 7 THEN 'Stage 7: Post-Approval and Follow-Up'
-        WHEN csp.current_stage = 8 THEN 'Stage 8: Commission Collection'
-        WHEN csp.current_stage = 1 THEN 'Stage 1: Not Interested'
-        WHEN csp.current_stage = 9 THEN 'Stage 9: Dead Stage'
-        ELSE 'Unknown Stage'
-    END AS current_stage_name
+    csp.stage_name AS current_stage_name
 FROM 
     public.client_stage_progression csp
 JOIN 
@@ -269,13 +247,15 @@ if st.button('Refresh Data'):
         # Display the data in a tabular form
         st.dataframe(employee_stage_data)
 
-        # Create a bar chart to visualize the number of clients per employee in different stages
-        st.subheader("Bar Chart of Client Stages by Employee")
-        fig, ax = plt.subplots()
-        employee_stage_summary = employee_stage_data.groupby(['employee_name', 'current_stage_name']).size().unstack().fillna(0)
-        employee_stage_summary.plot(kind='bar', stacked=True, ax=ax)
-        ax.set_xlabel('Employee')
-        ax.set_ylabel('Number of Clients')
-        ax.set_title('Client Stages by Employee')
-        plt.xticks(rotation=45, ha='right')
-        st.pyplot(fig)
+    # Create a bar chart to visualize the number of clients per employee in different stages
+    st.subheader("Bar Chart of Client Stages by Employee")
+    fig, ax = plt.subplots(figsize=(14, 8))  # Increase the figure size
+    employee_stage_summary = employee_stage_data.groupby(['employee_name', 'current_stage_name']).size().unstack().fillna(0)
+    employee_stage_summary.plot(kind='bar', stacked=True, ax=ax)
+    ax.set_xlabel('Employee', fontsize=12)
+    ax.set_ylabel('Number of Clients', fontsize=12)
+    ax.set_title('Client Stages by Employee', fontsize=16)
+    plt.xticks(rotation=45, ha='right', fontsize=10)  # Adjust the rotation and font size for x-axis labels
+    plt.yticks(fontsize=10)  # Adjust the font size for y-axis labels
+    st.pyplot(fig)
+
