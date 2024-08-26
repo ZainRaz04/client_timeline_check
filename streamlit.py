@@ -12,85 +12,110 @@ db_params = {
     'port': '5432'
 }
 
-# SQL query to fetch the required records with NORMAL CLIENT classification
-fetch_records_query = """
+# SQL query to fetch the required records (excluding the client_status logic)
+fetch_max_stages_query = """
 WITH StageHistory AS (
     SELECT 
         csp.client_id,
-        c.fullname AS client_name,
-        e.fullname AS employee_name,
-        csp.current_stage,
-        csp.created_on AS time_entered_stage,
-        csp.stage_name,  -- Directly fetching the stage_name from the table
         ROW_NUMBER() OVER (PARTITION BY csp.client_id ORDER BY csp.created_on ASC) AS stage_order
     FROM 
         public.client_stage_progression csp
-    JOIN 
-        public.client c ON csp.client_id = c.id
-    JOIN 
-        public.employee e ON c.assigned_employee = e.id
+)
+SELECT MAX(stage_order) AS max_stage
+FROM StageHistory;
+"""
+
+# Step 2: Adjust the Data Fetch Query
+def fetch_dynamic_stages_query(max_stage):
+    stages_select = ",\n".join(
+        [f"MAX(CASE WHEN ds.stage_number = {i} THEN ds.stage_name END) AS Data_{i}_recorded," +
+         f"MAX(CASE WHEN ds.stage_number = {i} THEN ds.time_entered_stage END) AS Time_for_data{i}_recorded"
+         for i in range(1, max_stage + 1)]
+    )
+
+    return f"""
+    WITH StageHistory AS (
+        SELECT 
+            csp.client_id,
+            c.fullname AS client_name,
+            e.fullname AS employee_name,
+            csp.current_stage,
+            csp.created_on AS time_entered_stage,
+            csp.stage_name,
+            ROW_NUMBER() OVER (PARTITION BY csp.client_id ORDER BY csp.created_on ASC) AS stage_order
+        FROM 
+            public.client_stage_progression csp
+        JOIN 
+            public.client c ON csp.client_id = c.id
+        JOIN 
+            public.employee e ON c.assigned_employee = e.id
+    ),
+    ClientTimeDiff AS (
+        SELECT 
+            client_id,
+            MIN(time_entered_stage) AS first_stage_time,
+            MAX(time_entered_stage) AS last_stage_time,
+            EXTRACT(EPOCH FROM (MAX(time_entered_stage) - MIN(time_entered_stage))) / 3600 AS time_diff_hours,
+            MAX(current_stage) AS max_stage_reached
+        FROM 
+            StageHistory
+        GROUP BY 
+            client_id
+    ),
+    DynamicStages AS (
+        SELECT
+            client_id,
+            stage_name,
+            time_entered_stage,
+            ROW_NUMBER() OVER (PARTITION BY client_id ORDER BY time_entered_stage) AS stage_number
+        FROM
+            StageHistory
+    )
+    SELECT 
+        sh.client_id,
+        CONCAT('https://services.followupboss.com/2/people/view/', sh.client_id) AS followup_boss_link,
+        sh.client_name,
+        sh.employee_name,
+        {stages_select}
+    FROM 
+        StageHistory sh
+    LEFT JOIN 
+        DynamicStages ds ON sh.client_id = ds.client_id
+    GROUP BY 
+        sh.client_id, sh.client_name, sh.employee_name
+    ORDER BY 
+        sh.client_id;
+    """
+
+# SQL query to calculate the average time difference for clients whose current_stage=8
+calculate_average_time_diff_query = """
+WITH StageHistory AS (
+    SELECT 
+        csp.client_id,
+        csp.created_on AS time_entered_stage,
+        ROW_NUMBER() OVER (PARTITION BY csp.client_id ORDER BY csp.created_on ASC) AS stage_order
+    FROM 
+        public.client_stage_progression csp
+    WHERE 
+        csp.current_stage = 8
 ),
 ClientTimeDiff AS (
     SELECT 
         client_id,
         MIN(time_entered_stage) AS first_stage_time,
         MAX(time_entered_stage) AS last_stage_time,
-        EXTRACT(EPOCH FROM (MAX(time_entered_stage) - MIN(time_entered_stage))) / 3600 AS time_diff_hours,
-        MAX(current_stage) AS max_stage_reached
+        EXTRACT(EPOCH FROM (MAX(time_entered_stage) - MIN(time_entered_stage))) / 3600 AS time_diff_hours
     FROM 
         StageHistory
     GROUP BY 
         client_id
-),
-DynamicStages AS (
-    SELECT
-        client_id,
-        stage_name,
-        time_entered_stage,
-        ROW_NUMBER() OVER (PARTITION BY client_id ORDER BY time_entered_stage) AS stage_number
-    FROM
-        StageHistory
 )
 SELECT 
-    sh.client_id,
-    CONCAT('https://services.followupboss.com/2/people/view/', sh.client_id) AS followup_boss_link,
-    sh.client_name,
-    sh.employee_name,
-    CASE 
-        WHEN ctd.max_stage_reached = 8 AND ctd.time_diff_hours <= 35 THEN 'NORMAL CLIENT'
-        ELSE 'NOT NORMAL CLIENT'
-    END AS client_status,
-    MAX(CASE WHEN ds.stage_number = 1 THEN ds.stage_name END) AS "STAGE_1_NAME",
-    MAX(CASE WHEN ds.stage_number = 1 THEN ds.time_entered_stage END) AS "TIME_ENTERED_STAGE_1",
-    MAX(CASE WHEN ds.stage_number = 2 THEN ds.stage_name END) AS "STAGE_2_NAME",
-    MAX(CASE WHEN ds.stage_number = 2 THEN ds.time_entered_stage END) AS "TIME_ENTERED_STAGE_2",
-    MAX(CASE WHEN ds.stage_number = 3 THEN ds.stage_name END) AS "STAGE_3_NAME",
-    MAX(CASE WHEN ds.stage_number = 3 THEN ds.time_entered_stage END) AS "TIME_ENTERED_STAGE_3",
-    MAX(CASE WHEN ds.stage_number = 4 THEN ds.stage_name END) AS "STAGE_4_NAME",
-    MAX(CASE WHEN ds.stage_number = 4 THEN ds.time_entered_stage END) AS "TIME_ENTERED_STAGE_4",
-    MAX(CASE WHEN ds.stage_number = 5 THEN ds.stage_name END) AS "STAGE_5_NAME",
-    MAX(CASE WHEN ds.stage_number = 5 THEN ds.time_entered_stage END) AS "TIME_ENTERED_STAGE_5",
-    MAX(CASE WHEN ds.stage_number = 6 THEN ds.stage_name END) AS "STAGE_6_NAME",
-    MAX(CASE WHEN ds.stage_number = 6 THEN ds.time_entered_stage END) AS "TIME_ENTERED_STAGE_6",
-    MAX(CASE WHEN ds.stage_number = 7 THEN ds.stage_name END) AS "STAGE_7_NAME",
-    MAX(CASE WHEN ds.stage_number = 7 THEN ds.time_entered_stage END) AS "TIME_ENTERED_STAGE_7",
-    MAX(CASE WHEN ds.stage_number = 8 THEN ds.stage_name END) AS "STAGE_8_NAME",
-    MAX(CASE WHEN ds.stage_number = 8 THEN ds.time_entered_stage END) AS "TIME_ENTERED_STAGE_8",
-    MAX(CASE WHEN ds.stage_number = 9 THEN ds.stage_name END) AS "STAGE_9_NAME",
-    MAX(CASE WHEN ds.stage_number = 9 THEN ds.time_entered_stage END) AS "TIME_ENTERED_STAGE_9"
+    AVG(time_diff_hours) AS avg_time_diff_hours
 FROM 
-    StageHistory sh
-JOIN 
-    ClientTimeDiff ctd ON sh.client_id = ctd.client_id
-LEFT JOIN 
-    DynamicStages ds ON sh.client_id = ds.client_id
-GROUP BY 
-    sh.client_id, sh.client_name, sh.employee_name, ctd.time_diff_hours, ctd.max_stage_reached
-ORDER BY 
-    sh.client_id;
+    ClientTimeDiff;
 """
 
-# SQL query to fetch the latest stage each client is in (without Follow-Up Boss link)
 fetch_latest_stage_query = """
 SELECT 
     csp.client_id,
@@ -149,6 +174,106 @@ ORDER BY
     e.fullname, c.fullname;
 """
 
+# SQL query to classify clients based on the calculated average time difference
+calculate_average_time_diff_query = """
+WITH StageHistory AS (
+    SELECT 
+        csp.client_id,
+        csp.current_stage,
+        csp.created_on AS time_entered_stage,
+        ROW_NUMBER() OVER (PARTITION BY csp.client_id ORDER BY csp.created_on DESC) AS row_num -- Ordering DESC to get the last row
+    FROM 
+        public.client_stage_progression csp
+),
+ClientTimeDiff AS (
+    SELECT 
+        client_id,
+        MIN(time_entered_stage) AS first_stage_time,
+        MAX(time_entered_stage) AS last_stage_time,
+        current_stage,
+        EXTRACT(EPOCH FROM (MAX(time_entered_stage) - MIN(time_entered_stage))) / 3600 AS time_diff_hours
+    FROM 
+        StageHistory
+    WHERE 
+        row_num = 1 -- Selecting only the last row for each client
+    GROUP BY 
+        client_id, current_stage
+    HAVING
+        current_stage = 8 -- Ensure that the last stage is 8
+)
+SELECT 
+    AVG(time_diff_hours) AS avg_time_diff_hours
+FROM 
+    ClientTimeDiff;
+"""
+
+# SQL query to classify clients based on the calculated average time difference
+classify_clients_query_template = """
+WITH StageHistory AS (
+    SELECT 
+        csp.client_id,
+        csp.current_stage,
+        csp.created_on AS time_entered_stage,
+        ROW_NUMBER() OVER (PARTITION BY csp.client_id ORDER BY csp.created_on DESC) AS row_num -- Ordering DESC to get the last row
+    FROM 
+        public.client_stage_progression csp
+),
+ClientTimeDiff AS (
+    SELECT 
+        client_id,
+        MIN(time_entered_stage) AS first_stage_time,
+        MAX(time_entered_stage) AS last_stage_time,
+        current_stage,
+        EXTRACT(EPOCH FROM (MAX(time_entered_stage) - MIN(time_entered_stage))) / 3600 AS time_diff_hours
+    FROM 
+        StageHistory
+    WHERE 
+        row_num = 1 -- Selecting only the last row for each client
+    GROUP BY 
+        client_id, current_stage
+)
+SELECT 
+    ctd.client_id,
+    c.fullname AS client_name,
+    e.fullname AS employee_name,
+    CASE 
+        WHEN ctd.current_stage = 8 AND ctd.time_diff_hours <= {avg_time_diff_hours} THEN 'NORMAL CLIENT'
+        ELSE 'NOT NORMAL CLIENT'
+    END AS client_status
+FROM 
+    ClientTimeDiff ctd
+JOIN 
+    public.client c ON ctd.client_id = c.id
+JOIN 
+    public.employee e ON c.assigned_employee = e.id
+ORDER BY 
+    ctd.client_id;
+"""
+def fetch_max_stage():
+    connection = None
+    cursor = None
+    try:
+        # Connect to the database
+        connection = psycopg2.connect(**db_params)
+        cursor = connection.cursor()
+        
+        # Execute the query to fetch the maximum number of stages
+        cursor.execute(fetch_max_stages_query)
+        
+        # Fetch the result (maximum stage number)
+        max_stage = cursor.fetchone()[0]
+        
+        return max_stage
+        
+    except Exception as error:
+        st.error(f"Error fetching maximum stage: {error}")
+    finally:
+        # Close the cursor and connection
+        if cursor:
+            cursor.close()
+        if connection:
+            connection.close()
+
 def fetch_data(query):
     connection = None
     cursor = None
@@ -180,13 +305,42 @@ def fetch_data(query):
         if connection:
             connection.close()
 
+def fetch_average_time_diff():
+    connection = None
+    cursor = None
+    try:
+        # Connect to the database
+        connection = psycopg2.connect(**db_params)
+        cursor = connection.cursor()
+        
+        # Execute the query to calculate average time difference
+        cursor.execute(calculate_average_time_diff_query)
+        
+        # Fetch the result (average time difference)
+        avg_time_diff = cursor.fetchone()[0]
+        
+        return avg_time_diff
+        
+    except Exception as error:
+        st.error(f"Error calculating average time difference: {error}")
+    finally:
+        # Close the cursor and connection
+        if cursor:
+            cursor.close()
+        if connection:
+            connection.close()
+
 # Streamlit application
 st.title("Client Stage Progression Report")
 
 # Add a refresh button
 if st.button('Refresh Data'):
-    # Fetch data for the client stage progression report
-    data = fetch_data(fetch_records_query)
+    # Fetch the average time difference for clients in stage 8
+    avg_time_diff_hours = fetch_average_time_diff()
+
+    max_stage = fetch_max_stage()    # Fetch data for the client stage progression report
+    dynamic_query = fetch_dynamic_stages_query(max_stage)
+    data = fetch_data(dynamic_query)
 
     # Rename columns to "First_Stage_Recorded", "Second_Stage_Recorded", etc.
     rename_columns = {
@@ -258,4 +412,18 @@ if st.button('Refresh Data'):
     plt.xticks(rotation=45, ha='right', fontsize=10)  # Adjust the rotation and font size for x-axis labels
     plt.yticks(fontsize=10)  # Adjust the font size for y-axis labels
     st.pyplot(fig)
+    
+    # Classify clients as NORMAL or NOT NORMAL based on the calculated average time difference
+    classify_clients_query = classify_clients_query_template.format(avg_time_diff_hours=avg_time_diff_hours)
+    classified_clients_data = fetch_data(classify_clients_query)
 
+    if classified_clients_data is not None:
+        st.subheader("NORMAL CLIENTS")
+        normal_clients = classified_clients_data[classified_clients_data['client_status'] == 'NORMAL CLIENT']
+        st.dataframe(normal_clients)
+        st.write(f"Total NORMAL CLIENTS: {len(normal_clients)}")
+
+        st.subheader("NOT NORMAL CLIENTS")
+        not_normal_clients = classified_clients_data[classified_clients_data['client_status'] == 'NOT NORMAL CLIENT']
+        st.dataframe(not_normal_clients)
+        st.write(f"Total NOT NORMAL CLIENTS: {len(not_normal_clients)}")
